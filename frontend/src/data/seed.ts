@@ -386,8 +386,8 @@ export const SEED_ROWS: Record<string, EntryRow[]> = {
     {
       "id": 3,
       "status": "溢流风险",
-      "pending": false,
-      "abnormal": false,
+      "pending": true,
+      "abnormal": true,
       "管段编号": "DRAI-0003",
       "上游节点": "排水管网样例3",
       "下游节点": "排水管网样例3",

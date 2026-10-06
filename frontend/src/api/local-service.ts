@@ -1,9 +1,17 @@
 import { MODULE_BY_KEY } from '@/data/modules'
-import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
-import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
+import { allRows, listRows, resetRows, saveRows, storageIssue } from '@/data/local-store'
+import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult, StatusEvent } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
+// 模块在元数据里登记了 abnormalStatuses 时以状态为准，不再看动作动词。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
+
+function timestamp(): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  return `${date} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
+}
 
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
@@ -25,7 +33,14 @@ export function filterRows(rows: EntryRow[], filters: Record<string, string>): E
 
 export function listEntries(key: string, filters: Record<string, string> = {}): PageResult {
   const matched = filterRows(listRows(key), filters)
-  return { items: matched, total: matched.length, page: 1, size: matched.length }
+  const notice = storageIssue()
+  return {
+    items: matched,
+    total: matched.length,
+    page: 1,
+    size: matched.length,
+    ...(notice ? { notice } : {}),
+  }
 }
 
 export function runAction(key: string, id: number, action: string): ActionResult {
@@ -34,21 +49,33 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
   }
+  // 每次调用都是同步的「读-改-写」，多个操作同时提交时按提交顺序逐个校验、落库：
+  // 后到的操作基于最新状态判断，无效的直接拒绝，最终只保留最后一个有效状态。
   const rows = listRows(key)
   const index = rows.findIndex((row) => Number(row.id) === id)
   if (index < 0) {
     return { ok: false, message: `没有找到编号为 ${id} 的${meta.entity}` }
   }
   const current = String(rows[index].status)
+  if (meta.terminalStatuses?.includes(current)) {
+    return {
+      ok: false,
+      message: `${meta.entity}已是「${current}」，不能再执行「${action}」；历史预警记录仍可查看`,
+    }
+  }
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
   }
   const lastStatus = meta.statuses[meta.statuses.length - 1]
+  const event: StatusEvent = { at: timestamp(), action, from: current, to: target }
   const updated: EntryRow = {
     ...rows[index],
     status: target,
     pending: target !== lastStatus,
-    abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    abnormal: meta.abnormalStatuses
+      ? meta.abnormalStatuses.includes(target)
+      : NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    history: [...(rows[index].history ?? []), event],
   }
   const next = [...rows]
   next[index] = updated
@@ -101,5 +128,6 @@ export function loadOverview(): OverviewResult {
     { label: '待处理', value: modules.reduce((sum, item) => sum + item.pending, 0) },
     { label: '异常量', value: modules.reduce((sum, item) => sum + item.abnormal, 0) },
   ]
-  return { cards, modules }
+  const notice = storageIssue()
+  return { cards, modules, ...(notice ? { notice } : {}) }
 }
