@@ -51,6 +51,8 @@
               :key="action"
               class="link"
               type="button"
+              :disabled="isTerminal(row)"
+              :title="isTerminal(row) ? '管段已封堵，不能再生成新的预警，历史预警仍可查看' : ''"
               @click="runAction(action, row)"
             >
               {{ action }}
@@ -66,6 +68,9 @@
     <footer class="page-foot">
       <span>共 {{ total }} 条排水管网记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
+      <button v-if="loadFailed" class="link" type="button" @click="recoverSeed">
+        读取失败，点此重置为示例数据（损坏原文已备份）
+      </button>
     </footer>
   </section>
 </template>
@@ -77,6 +82,7 @@ import {
   downloadEntries,
   listEntries,
   moduleMeta,
+  resetModule,
   runAction as applyAction,
 } from '@/api/local-service'
 import type { EntryRow } from '@/data/types'
@@ -85,19 +91,36 @@ const meta = moduleMeta('drain_network')
 const columns = ["管段编号", "上游节点", "下游节点", "管段长度", "断面尺寸", "设计坡度", "排水能力", "运行状况"]
 const actions = ["标记淤积", "预警溢流", "确认封堵"]
 const statuses = ["正常", "淤积预警", "溢流风险", "已封堵"]
-const stats = [{"label": "管段总数", "value": 0}, {"label": "淤积预警管段", "value": 0}, {"label": "溢流风险管段", "value": 0}]
+const terminalStatuses = meta.terminalStatuses ?? []
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const loadFailed = ref(false)
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function countByStatus(status: string): number {
+  return rows.value.filter((row) => String(row.status) === status).length
+}
+
+// 风险提示跟着列表数据走：状态一变，卡片、图例、筛选结果一起更新
+const stats = computed(() => [
+  { label: '管段总数', value: rows.value.length },
+  { label: '淤积预警管段', value: countByStatus('淤积预警') },
+  { label: '溢流风险管段', value: countByStatus('溢流风险') },
+])
+
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
-    count: rows.value.filter((row) => String(row.status) === status).length,
+    count: countByStatus(status),
   })),
 )
+
+function isTerminal(row: EntryRow): boolean {
+  return terminalStatuses.includes(String(row.status))
+}
 
 function resetFilters() {
   filters.value = {}
@@ -105,7 +128,11 @@ function resetFilters() {
 }
 
 function exportRows() {
-  downloadEntries(meta.key)
+  try {
+    downloadEntries(meta.key)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '排水管网清单导出失败'
+  }
 }
 
 function openCreate() {
@@ -122,13 +149,27 @@ function runAction(action: string, row: EntryRow) {
   reload()
 }
 
+function recoverSeed() {
+  errorMessage.value = ''
+  try {
+    resetModule(meta.key)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '重置排水管网数据失败'
+    return
+  }
+  reload()
+}
+
 function reload() {
   errorMessage.value = ''
   try {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    loadFailed.value = false
   } catch (error) {
+    // 读取失败：保留上次结果，只说明原因，不清空列表
+    loadFailed.value = true
     errorMessage.value = error instanceof Error ? error.message : '排水管网列表读取失败'
   }
 }

@@ -99,6 +99,7 @@ export const MODULES: ModuleMeta[] = [
     statuses: ["正常", "淤积预警", "溢流风险", "已封堵"],
     actions: ["标记淤积", "预警溢流", "确认封堵"],
     actionTargets: {"标记淤积": "淤积预警", "预警溢流": "溢流风险", "确认封堵": "已封堵"},
+    terminalStatuses: ["已封堵"],
     metrics: ["管段总数", "淤积预警管段", "溢流风险管段"],
   },
   {

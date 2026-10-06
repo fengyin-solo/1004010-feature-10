@@ -17,6 +17,8 @@ export type ModuleMeta = {
   statuses: string[]
   actions: string[]
   actionTargets: Record<string, string>
+  /** 终态状态：进入后不允许再执行任何动作，记录保留可查（如排水管段的「已封堵」）。 */
+  terminalStatuses?: string[]
   metrics: string[]
 }
 

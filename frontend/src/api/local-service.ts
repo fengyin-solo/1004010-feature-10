@@ -5,6 +5,10 @@ import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } f
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
 const NEGATIVE_ACTIONS = ['撤销', '作废', '拒绝', '驳回', '停用', '忽略', '下线', '回滚']
 
+// 状态本身代表风险/异常的字眼：进入这些状态就计入看板异常量；
+// 封堵、完成这类处置终态不算异常，预警闭环后异常量要跟着降下来。
+const RISK_STATUS_KEYWORDS = ['预警', '风险', '异常', '超标', '故障', '离线', '停用', '作废', '返修', '复测', '复查', '清退', '驳回', '退回']
+
 export function moduleMeta(key: string): ModuleMeta {
   const meta = MODULE_BY_KEY.get(key)
   if (!meta) {
@@ -34,7 +38,13 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (!target) {
     return { ok: false, message: `${meta.entity}没有登记「${action}」这个动作` }
   }
-  const rows = listRows(key)
+  let rows: EntryRow[]
+  try {
+    rows = listRows(key)
+  } catch (error) {
+    // 读取失败：不改动任何记录，把原因带回去给页面展示
+    return { ok: false, message: error instanceof Error ? error.message : '本地数据读取失败，操作未执行' }
+  }
   const index = rows.findIndex((row) => Number(row.id) === id)
   if (index < 0) {
     return { ok: false, message: `没有找到编号为 ${id} 的${meta.entity}` }
@@ -43,16 +53,28 @@ export function runAction(key: string, id: number, action: string): ActionResult
   if (current === target) {
     return { ok: false, message: `${meta.entity}已经是「${target}」，不用重复操作` }
   }
+  // 终态（如已封堵）不允许再流转：封堵管段不能再生成新的预警，历史预警记录保留可查
+  if ((meta.terminalStatuses ?? []).includes(current)) {
+    return { ok: false, message: `${meta.entity}已处于「${current}」，不能再执行「${action}」，历史记录仍可查看` }
+  }
   const lastStatus = meta.statuses[meta.statuses.length - 1]
   const updated: EntryRow = {
     ...rows[index],
     status: target,
     pending: target !== lastStatus,
-    abnormal: NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)),
+    abnormal:
+      NEGATIVE_ACTIONS.some((verb) => action.startsWith(verb)) ||
+      RISK_STATUS_KEYWORDS.some((keyword) => target.includes(keyword)),
   }
   const next = [...rows]
   next[index] = updated
-  saveRows(key, next)
+  try {
+    saveRows(key, next)
+  } catch (error) {
+    // 写入失败：记录保持原状态，不丢数据，说明原因
+    const reason = error instanceof Error ? error.message : '本地存储写入失败'
+    return { ok: false, message: `${meta.entity}${action}失败：${reason}，记录仍保持「${current}」` }
+  }
   return { ok: true, message: `${meta.entity}已${action}，当前状态「${target}」` }
 }
 
